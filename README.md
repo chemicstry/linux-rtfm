@@ -7,8 +7,7 @@ concurrency model.
 
 [rtfm]: https://japaric.github.io/cortex-m-rtfm/book/en/
 
-**IMPORTANT** (Currently) this is a `no_std`-only framework. You will *not* be
-able to use the standard library.
+**IMPORTANT** This crate was updated from non-portable syscall implementation to [nc](https://github.com/XuShaohua/nc) and it now partially works on aarch64 platforms. The only ported examples are `lock` and `periodic`. However, this signal based implementation proved to be problematic, because signal handler context has a lot of [limitations](https://man7.org/linux/man-pages/man7/signal.7.html). For example, `print` and `malloc` cannot be used safely.
 
 ## Supported API
 
@@ -24,7 +23,7 @@ able to use the standard library.
 
 ## Examples
 
-In this section we'll run [`rtfm/examples/lock.rs`](./rtfm/examples/lock.rs)
+In this section we'll run [`examples/lock.rs`](./examples/lock.rs)
 which is port of [this example] from the RTFM book.
 
 [this example]: https://japaric.github.io/cortex-m-rtfm/book/en/by-example/resources.html#priorities
@@ -33,12 +32,7 @@ which is port of [this example] from the RTFM book.
 $ # all code requires nightly because of inline / global assembly
 $ rustup default nightly
 
-$ T=x86_64-unknown-linux-gnu
-
-$ cd rtfm
-
-$ # you must pass the (redundant) `--target` flag or compilation will fail
-$ cargo build --target $T --example lock --release
+$ cargo build --example lock --release
 
 $ cp ../target/$T/release/examples/lock .
 

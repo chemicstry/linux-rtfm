@@ -1,16 +1,23 @@
-[profile.dev]
-panic = "abort"
+[package]
+authors = ["Jorge Aparicio <jorge@japaric.io>"]
+edition = "2018"
+name = "linux-rtfm"
+publish = false
+version = "0.0.0-alpha.0"
 
-[profile.release]
-codegen-units = 1 # better optimizations
-lto = true # better optimizations
-panic = "abort"
+[lib]
+name = "rtfm"
 
-[workspace]
-members = [
-  "rtfm",
-  "rtfm/macros",
-]
+[dependencies]
+cty = "0.2.0"
+heapless = { version = "0.5.0-alpha.2" }
+nc = "0.7"
+linux-rtfm-macros = { path = "macros" }
+ufmt = "0.1.0-beta.4"
+rtfm-core = { git = "https://github.com/rtic-rs/rtic-core", tag = "v0.3.0", version = "0.3.0" }
+
+[dev-dependencies]
+ufmt-utils = "0.1.0-alpha.1"
 
 [patch.crates-io]
 nc = { git = "https://github.com/chemicstry/nc", branch = "fix_rt_sigprocmask" }
