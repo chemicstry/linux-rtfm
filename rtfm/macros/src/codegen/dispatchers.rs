@@ -117,7 +117,7 @@ pub fn codegen(app: &App, analysis: &Analysis) -> Vec<TokenStream2> {
                     extern "C" fn #handler(
                         _: i32,
                         si: &mut rtfm::export::siginfo_t,
-                        _: *mut rtfm::export::c_void,
+                        _: usize,
                     ) {
                         unsafe {
                             use rtfm::Mutex as _;
@@ -125,9 +125,10 @@ pub fn codegen(app: &App, analysis: &Analysis) -> Vec<TokenStream2> {
                             /// The priority of this interrupt handler
                             const PRIORITY: u8 = #level;
 
-                            if si.si_code == rtfm::export::SI_QUEUE {
-                                let task: #t = core::mem::transmute((si.si_value >> 8) as u8);
-                                let index = (si.si_value & 0xff) as u8;
+                            if si.siginfo.si_code == rtfm::export::SI_QUEUE {
+                                let si_value = si.siginfo.sifields.rt.sigval.sival_ptr;
+                                let task: #t = core::mem::transmute((si_value >> 8) as u8);
+                                let index = (si_value & 0xff) as u8;
                                 match task {
                                     #(#arms)*
                                 }
@@ -145,14 +146,15 @@ pub fn codegen(app: &App, analysis: &Analysis) -> Vec<TokenStream2> {
                     extern "C" fn #handler(
                         _: i32,
                         si: &mut rtfm::export::siginfo_t,
-                        _: *mut rtfm::export::c_void,
+                        _: usize,
                     ) {
                         unsafe {
                             /// The priority of this interrupt handler
                             const PRIORITY: u8 = #level;
 
-                            let task: #t = core::mem::transmute((si.si_value >> 8) as u8);
-                            let index = (si.si_value & 0xff) as u8;
+                            let si_value = si.siginfo.sifields.rt.sigval.sival_ptr;
+                            let task: #t = core::mem::transmute((si_value >> 8) as u8);
+                            let index = (si_value & 0xff) as u8;
                             match task {
                                 #(#arms)*
                             }
@@ -176,7 +178,7 @@ pub fn codegen(app: &App, analysis: &Analysis) -> Vec<TokenStream2> {
                     extern "C" fn #handler(
                         _: i32,
                         si: &mut rtfm::export::siginfo_t,
-                        _: *mut rtfm::export::c_void,
+                        _: usize,
                     ) {
                         unsafe {
                             use rtfm::Mutex as _;

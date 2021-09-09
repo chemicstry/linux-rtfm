@@ -11,14 +11,10 @@ name = "rtfm"
 [dependencies]
 cty = "0.2.0"
 heapless = { version = "0.5.0-alpha.2" }
-linux-io = { path = "../linux-io" }
-linux-rt = { path = "../linux-rt" }
+nc = "0.7"
 linux-rtfm-macros = { path = "macros" }
-linux-sys = { path = "../linux-sys" }
 ufmt = "0.1.0-beta.4"
-rtfm-core = { git = "https://github.com/japaric/rtfm-core" }
+rtfm-core = { git = "https://github.com/rtic-rs/rtic-core", tag = "v0.3.0", version = "0.3.0" }
 
 [dev-dependencies]
-panic-exit = { path = "../panic-exit" }
-panic-stderr = { path = "../panic-stderr" }
 ufmt-utils = "0.1.0-alpha.1"

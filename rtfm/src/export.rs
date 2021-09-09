@@ -1,10 +1,9 @@
 use core::{
     cell::Cell,
-    mem::MaybeUninit,
     ops::Range,
-    ptr,
     sync::atomic::{AtomicBool, AtomicI32, Ordering},
 };
+use std::mem::size_of;
 
 use heapless::spsc::SingleCore;
 pub use heapless::{
@@ -13,11 +12,12 @@ pub use heapless::{
     spsc::Queue,
     BinaryHeap,
 };
-use linux_io::Stderr;
-pub use linux_sys::{
-    cty::c_void, exit, getpid, pause, pid_t, sched_yield, siginfo_t, timer_t, SI_QUEUE,
+pub use nc::{exit, getpid, pid_t, sched_yield, siginfo_t, timer_t, SI_QUEUE};
+use nc::{
+    mmap, rt_sigaction, rt_sigprocmask, sched_param_t, sched_setaffinity, sched_setscheduler,
+    sigaction_t, sigev_un_t, sigevent_t, sighandler_t, sigset_t, sigval_t, SCHED_FIFO, SIGRTMIN,
+    SIG_BLOCK,
 };
-use linux_sys::{sched_param, sigaction, sigevent, sighandler_t, sigval_t, SIGRTMIN};
 
 pub use crate::tq::{NotReady, TimerQueue};
 
@@ -65,7 +65,7 @@ impl Pid {
             let pid = self.inner.load(Ordering::Relaxed);
 
             if pid == 0 {
-                linux_sys::sched_yield()
+                sched_yield().expect("Yield failed");
             } else {
                 break pid;
             }
@@ -105,81 +105,84 @@ pub unsafe fn init_runtime(signo_max: Option<u8>) {
     set_affinity(OURSELVES, 0);
 
     // raise the priority to the minimal real-time priority
-    linux_sys::sched_setscheduler(
-        OURSELVES,
-        linux_sys::SCHED_FIFO,
-        &sched_param { sched_priority: 1 },
-    )
-    .unwrap_or_else(|_| {
-        fatal(
-            "error: couldn't change scheduling policy; \
-             run `sudo setcap cap_sys_nice+ep $binary` first\n",
-        )
-    });
+    sched_setscheduler(OURSELVES, SCHED_FIFO, &sched_param_t { sched_priority: 1 }).expect(
+        "error: couldn't change scheduling policy; \
+    run `sudo setcap cap_sys_nice+ep $binary` first",
+    );
 
     // block all the used real-time signals; this is equivalent to `interrupt::disable`
     if let Some(signo) = signo_max {
         let mask = ((1 << (signo + 1)) - 1) << (SIGRTMIN - 1);
-        linux_sys::rt_sigprocmask(linux_sys::SIG_BLOCK, &mask, ptr::null_mut())
-            .unwrap_or_else(|_| fatal("error: couldn't change the signal mask\n"));
+        let mask = sigset_t { sig: [mask] };
+        rt_sigprocmask(
+            SIG_BLOCK,
+            &mask,
+            &mut sigset_t::default(),
+            size_of::<sigset_t>(),
+        )
+        .expect("error: couldn't change the signal mask");
     }
 }
 
-pub unsafe fn spawn(child: extern "C" fn() -> !) -> pid_t {
-    const PAGE_SIZE: u64 = 4 * 1024; // 4 KiB (output of `getconf PAGESIZE`)
-    const STACK_SIZE: u64 = 2 * 1024 * PAGE_SIZE; // 8 MiB (output of `ulimit -s`)
+pub unsafe fn spawn(_child: extern "C" fn() -> !) -> pid_t {
+    const PAGE_SIZE: usize = 4 * 1024; // 4 KiB (output of `getconf PAGESIZE`)
+    const STACK_SIZE: usize = 2 * 1024 * PAGE_SIZE; // 8 MiB (output of `ulimit -s`)
 
-    linux_sys::mmap(
+    let stack_low = mmap(
         0,          // address; 0 means any page-aligned address
         STACK_SIZE, // length of mapping
-        linux_sys::PROT_READ | // read access
-        linux_sys::PROT_WRITE, // write access
-        linux_sys::MAP_ANONYMOUS | // mapping is not backed by any file
-        linux_sys::MAP_PRIVATE | // mapping is private to other threads / processes
-        linux_sys::MAP_GROWSDOWN | // mapping suitable for stacks
-        linux_sys::MAP_UNINITIALIZED, // leave memory uninitialized
-        !0,         // file descriptor; needs to be `-1` because of MAP_ANONYMOUS
+        nc::PROT_READ | // read access
+        nc::PROT_WRITE, // write access
+        nc::MAP_ANONYMOUS | // mapping is not backed by any file
+        nc::MAP_PRIVATE | // mapping is private to other threads / processes
+        nc::MAP_GROWSDOWN, // mapping suitable for stacks
+        -1,         // file descriptor; needs to be `-1` because of MAP_ANONYMOUS
         0,          // offset; ignored because of MAP_ANONYMOUS
     )
-    .and_then(|stack_low| {
-        // the stack grows downwards so we must pass the highest address of the mapping to `clone`
-        let stack_high = (stack_low as u64 + STACK_SIZE) as *mut _;
+    .expect("MMAP failed in process spawn");
 
-        // spin a new thread
-        linux_sys::x86_64_clone(
-            linux_sys::CLONE_VM | // new thread shares memory with the parent
-            linux_sys::CLONE_THREAD | // share thread group
-            linux_sys::CLONE_SIGHAND, // shared signal handlers; required by `CLONE_THREAD`
-            stack_high,
-            child,
-        )
-    })
-    .unwrap_or_else(|_| fatal("error: couldn't spawn a new thread\n"))
+    let stack_high = stack_low + STACK_SIZE;
+
+    // spin a new thread
+    nc::clone(
+        nc::CLONE_VM | // new thread shares memory with the parent
+        nc::CLONE_THREAD | // share thread group
+        nc::CLONE_SIGHAND, // shared signal handlers; required by `CLONE_THREAD`
+        stack_high,
+        &mut 0,
+        &mut 0,
+        0,
+    )
+    .expect("Process clone failed")
 }
 
 pub unsafe fn set_affinity(tid: pid_t, core: u8) {
-    linux_sys::sched_setaffinity(tid, &[1 << core, 0, 0, 0, 0, 0, 0, 0])
-        .unwrap_or_else(|_| fatal("error: couldn't change CPU affinity\n"));
+    sched_setaffinity(tid, 1, &[1 << core]).expect("error: couldn't change CPU affinity");
 }
 
 pub unsafe fn timer_create(tid: Option<pid_t>, signo: u8) -> timer_t {
-    let (sigev_notify, sigev_tid) = if let Some(tid) = tid {
+    let (sigev_notify, sigev_un) = if let Some(tid) = tid {
         // multi-core application
-        (linux_sys::SIGEV_THREAD_ID, tid)
+        (nc::SIGEV_THREAD_ID, sigev_un_t { tid })
     } else {
         // single-core application
-        (linux_sys::SIGEV_SIGNAL, 0)
+        (nc::SIGEV_SIGNAL, sigev_un_t::default())
     };
-    linux_sys::timer_create(
-        linux_sys::CLOCK_MONOTONIC,
-        &sigevent {
+
+    let mut tid = 0;
+    nc::timer_create(
+        nc::CLOCK_MONOTONIC,
+        Some(&mut sigevent_t {
             sigev_value: sigval_t { sival_int: 0 },
             sigev_signo: SIGRTMIN + i32::from(signo),
             sigev_notify,
-            sigev_tid,
-        },
+            sigev_un,
+        }),
+        &mut tid,
     )
-    .unwrap_or_else(|_| fatal("error: couldn't create a timer\n"))
+    .expect("error: couldn't create a timer");
+
+    tid
 }
 
 pub unsafe fn lock<T, R>(
@@ -207,36 +210,38 @@ pub unsafe fn mask(Range { start, end }: Range<u8>, current: u8, ceiling: u8, bl
     let len = end.wrapping_sub(start);
     let mask =
         ((1 << (ceiling - current)) - 1) << (SIGRTMIN - 1 + i32::from(start + len - ceiling));
-    linux_sys::rt_sigprocmask(
+    let mask = sigset_t { sig: [mask] };
+    rt_sigprocmask(
         if block {
-            linux_sys::SIG_BLOCK
+            nc::SIG_BLOCK
         } else {
-            linux_sys::SIG_UNBLOCK
+            nc::SIG_UNBLOCK
         },
         &mask,
-        ptr::null_mut(),
+        &mut sigset_t::default(),
+        size_of::<sigset_t>(),
     )
-    .unwrap_or_else(|_| fatal("error: couldn't change the signal mask\n"));
+    .expect("error: couldn't change the signal mask");
 }
 
 pub unsafe fn enqueue(tgid: i32, tid: Option<i32>, signo: u8, task: u8, index: u8) {
-    let mut si: siginfo_t = MaybeUninit::uninit().assume_init();
-    si.si_code = linux_sys::SI_QUEUE;
-    si.si_value = (usize::from(task) << 8) + usize::from(index);
+    let mut si = siginfo_t::default();
+    si.siginfo.si_code = nc::SI_QUEUE;
+    si.siginfo.sifields.rt.sigval.sival_ptr = (usize::from(task) << 8) + usize::from(index);
 
     if let Some(tid) = tid {
-        linux_sys::rt_tgsigqueueinfo(tgid, tid, SIGRTMIN + i32::from(signo), &si)
-            .unwrap_or_else(|_| fatal("error: couldn't enqueue signal\n"));
+        nc::rt_tgsigqueueinfo(tgid, tid, SIGRTMIN + i32::from(signo), &mut si)
+            .expect("error: couldn't enqueue signal\n");
     } else {
-        linux_sys::rt_sigqueueinfo(tgid, SIGRTMIN + i32::from(signo), &si)
-            .unwrap_or_else(|_| fatal("error: couldn't enqueue signal\n"));
+        nc::rt_sigqueueinfo(tgid, SIGRTMIN + i32::from(signo), &mut si)
+            .expect("error: couldn't enqueue signal\n");
     }
 }
 
 pub unsafe fn register(
     Range { start, end }: Range<u8>,
     priority: u8,
-    sigaction: extern "C" fn(i32, &mut siginfo_t, *mut c_void),
+    sigaction: extern "C" fn(i32, &mut siginfo_t, usize),
 ) {
     extern "C" {
         fn __restorer() -> !;
@@ -244,22 +249,20 @@ pub unsafe fn register(
 
     let len = end.wrapping_sub(start);
     let mask = (1 << len) - 1;
-    linux_sys::rt_sigaction(
-        SIGRTMIN + i32::from(end.wrapping_sub(priority)),
-        &sigaction {
-            sa_: sighandler_t { sigaction },
-            sa_flags: linux_sys::SA_RESTORER | linux_sys::SA_SIGINFO,
-            sa_restorer: Some(__restorer),
-            sa_mask: (mask ^ (mask >> (priority - 1))) << (i32::from(start) + SIGRTMIN - 1),
-        },
-        ptr::null_mut(),
-    )
-    .unwrap_or_else(|_| fatal("error: couldn't register signal handler\n"));
-}
+    let mask = (mask ^ (mask >> (priority - 1))) << (i32::from(start) + SIGRTMIN - 1);
+    let mask = sigset_t { sig: [mask] };
 
-pub(crate) fn fatal(s: &str) -> ! {
-    Stderr.write(s.as_bytes()).ok();
-    linux_sys::exit_group(101)
+    rt_sigaction(
+        SIGRTMIN + i32::from(end.wrapping_sub(priority)),
+        &sigaction_t {
+            sa_handler: sigaction as sighandler_t,
+            sa_flags: nc::SA_SIGINFO,
+            sa_mask: mask,
+        },
+        &mut sigaction_t::default(),
+        size_of::<sigset_t>(),
+    )
+    .expect("error: couldn't register signal handler");
 }
 
 // Newtype over `Cell` that forbids mutation through a shared reference
@@ -285,6 +288,15 @@ impl Priority {
     fn get(&self) -> u8 {
         self.inner.get()
     }
+}
+
+pub fn pause() {
+    // ppoll(0, 0, 0, 0) in C.
+    #[cfg(target_arch = "aarch64")]
+    nc::rt_sigsuspend(&mut sigset_t { sig: [255] }, size_of::<sigset_t>()).ok();
+
+    #[cfg(not(target_arch = "aarch64"))]
+    nc::pause().expect("pause failed");
 }
 
 pub fn assert_send<T>()

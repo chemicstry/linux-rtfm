@@ -1,4 +1,4 @@
-use proc_macro2::{TokenStream as TokenStream2};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use rtfm_syntax::ast::App;
 

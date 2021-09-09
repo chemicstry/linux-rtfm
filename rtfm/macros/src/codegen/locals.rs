@@ -80,5 +80,8 @@ pub fn codegen(
     );
 
     let ident = ctxt.ident(app);
-    (locals, quote!(#ident::Locals { #(#names,)* .. }: #ident::Locals))
+    (
+        locals,
+        quote!(#ident::Locals { #(#names,)* .. }: #ident::Locals),
+    )
 }

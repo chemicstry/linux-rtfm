@@ -3,12 +3,8 @@
 #![deny(warnings)]
 #![feature(proc_macro_hygiene)]
 #![no_main]
-#![no_std]
 
-use linux_io::{process, Stdout};
-use panic_exit as _;
-use ufmt::uwriteln;
-use ufmt_utils::{consts, Ignore, LineBuffered};
+use std::process;
 
 #[rtfm::app]
 const APP: () = {
@@ -16,10 +12,8 @@ const APP: () = {
 
     #[init(spawn = [foo])]
     fn init(c: init::Context) {
-        let mut stdout = LineBuffered::<_, consts::U100>::new(Ignore::new(Stdout));
-
         let rsp = &mut 0; // snapshot of the stack pointer
-        uwriteln!(&mut stdout, "A(%rsp={:?})", rsp as *mut _).ok();
+        println!("A(%rsp={:?})", rsp as *mut _);
 
         c.spawn.foo().ok();
     }
@@ -31,9 +25,7 @@ const APP: () = {
 
     #[task(priority = 1, resources = [SHARED], spawn = [bar, baz])]
     fn foo(mut c: foo::Context) {
-        let mut stdout = LineBuffered::<_, consts::U100>::new(Ignore::new(Stdout));
-
-        uwriteln!(&mut stdout, "B(%rsp={:?})", &mut 0 as *mut _).ok();
+        println!("B(%rsp={:?})", &mut 0 as *mut _);
 
         let spawn = c.spawn;
         c.resources.SHARED.lock(|shared| {
@@ -41,33 +33,26 @@ const APP: () = {
 
             spawn.bar().ok();
 
-            uwriteln!(&mut stdout, "C(SHARED={})", *shared as u64).ok();
+            println!("C(SHARED={})", *shared as u64);
 
             spawn.baz().ok();
         });
 
-        uwriteln!(&mut stdout, "F").ok();
+        println!("F");
     }
 
     #[task(priority = 2, resources = [SHARED])]
     fn bar(c: bar::Context) {
-        let mut stdout = LineBuffered::<_, consts::U100>::new(Ignore::new(Stdout));
-
         *c.resources.SHARED += 1;
 
-        uwriteln!(
-            &mut stdout,
+        println!(
             "E(%rsp={:?}, SHARED={})",
-            &mut 0 as *mut _,
-            *c.resources.SHARED as u64,
-        )
-        .ok();
+            &mut 0 as *mut _, *c.resources.SHARED as u64,
+        );
     }
 
     #[task(priority = 3)]
     fn baz(_: baz::Context) {
-        let mut stdout = LineBuffered::<_, consts::U100>::new(Ignore::new(Stdout));
-
-        uwriteln!(&mut stdout, "D(%rsp={:?})", &mut 0 as *mut _).ok();
+        println!("D(%rsp={:?})", &mut 0 as *mut _);
     }
 };

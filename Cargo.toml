@@ -8,12 +8,9 @@ panic = "abort"
 
 [workspace]
 members = [
-  "linux-io",
-  "linux-rt",
-  "linux-rt/macros",
-  "linux-sys",
-  "panic-exit",
-  "panic-stderr",
   "rtfm",
   "rtfm/macros",
 ]
+
+[patch.crates-io]
+nc = { git = "https://github.com/chemicstry/nc", branch = "fix_rt_sigprocmask" }

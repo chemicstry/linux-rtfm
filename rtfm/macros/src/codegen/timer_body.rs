@@ -4,7 +4,12 @@ use rtfm_syntax::{analyze::TimerQueue, ast::App, Core};
 
 use crate::{analyze::Analysis, codegen::util};
 
-pub fn codegen(sender: Core, timer_queue: &TimerQueue, app: &App, analysis: &Analysis) -> TokenStream2 {
+pub fn codegen(
+    sender: Core,
+    timer_queue: &TimerQueue,
+    app: &App,
+    analysis: &Analysis,
+) -> TokenStream2 {
     let timer = util::timer_ident(sender);
     let tq = util::tq_ident(sender);
     let arms = timer_queue

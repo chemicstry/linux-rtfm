@@ -1,10 +1,8 @@
-use core::{cmp::Ordering, ptr};
+use core::cmp::Ordering;
 
+use crate::time::Instant;
 use heapless::{binary_heap::Min, ArrayLength, BinaryHeap};
-use linux_io::time::Instant;
-use linux_sys::{itimerspec, pid_t, timer_t, timespec, SIGRTMIN, TIMER_ABSTIME};
-
-use crate::export::fatal;
+use nc::{itimerspec_t, pid_t, timer_t, timespec_t, SIGRTMIN, TIMER_ABSTIME};
 
 pub struct TimerQueue<T, N>(pub BinaryHeap<NotReady<T>, N, Min>)
 where
@@ -31,12 +29,10 @@ where
             // new entry has earlier deadline; signal the timer queue
             if let Some((tgid, tid)) = tgid_tid {
                 // multi-core application
-                linux_sys::tgkill(tgid, tid, SIGRTMIN + i32::from(signo))
-                    .unwrap_or_else(|_| fatal("error: couldn't send a signal\n"));
+                nc::tgkill(tgid, tid, SIGRTMIN + i32::from(signo)).expect("Sending signal failed");
             } else {
                 // single core application
-                linux_sys::kill(0, SIGRTMIN + i32::from(signo))
-                    .unwrap_or_else(|_| fatal("error: couldn't send a signal\n"));
+                nc::kill(0, SIGRTMIN + i32::from(signo)).expect("Sending signal failed");
             }
         }
 
@@ -53,19 +49,19 @@ where
                 Some((nr.task, nr.index))
             } else {
                 // set a new timeout
-                linux_sys::timer_settime(
+                nc::timer_settime(
                     timer_id,
                     TIMER_ABSTIME,
-                    &itimerspec {
-                        it_interval: timespec {
+                    &itimerspec_t {
+                        it_interval: timespec_t {
                             tv_sec: 0,
                             tv_nsec: 0,
                         },
                         it_value: instant.into(),
                     },
-                    ptr::null_mut(),
+                    None,
                 )
-                .unwrap_or_else(|_| fatal("error: couldn't set timeout\n"));
+                .expect("Failed to set timer");
 
                 None
             }
